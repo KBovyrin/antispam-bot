@@ -1,0 +1,20 @@
+spring:
+  datasource:
+    url: "jdbc:sqlite::memory:"
+    hikari:
+      maximum-pool-size: 1
+  sql:
+    init:
+      mode: always
+  jpa:
+    hibernate:
+      ddl-auto: none
+
+antispam:
+  enabled: false
+  bot-token: test-token
+  bot-username: test_bot
+  admin-chat-id: 1
+  group-ids: -100999
+  captcha:
+    timeout: 5m

@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: antispam-bot
+  datasource:
+    url: "${DB_URL:jdbc:sqlite:antispam.db}"
+    # SQLite — один писатель: пул из одного соединения исключает SQLITE_BUSY
+    hikari:
+      maximum-pool-size: 1
+  # Схема создаётся из schema.sql; Hibernate-диалект SQLite не умеет ddl из @Table
+  sql:
+    init:
+      mode: always
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.community.dialect.SQLiteDialect
+
+antispam:
+  enabled: ${ANTISPAM_ENABLED:true}
+  bot-token: ${BOT_TOKEN:}
+  bot-username: ${BOT_USERNAME:}
+  admin-chat-id: ${ADMIN_CHAT_ID:0}
+  # ID групп обсуждения через запятую
+  group-ids: ${GROUP_IDS:}
+  captcha:
+    timeout: ${CAPTCHA_TIMEOUT:5m}
+    prompt: "{name}, подтвердите, что вы не бот. Сколько будет {question}?"

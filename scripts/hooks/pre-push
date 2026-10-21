@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Локальный CI: запускается git-ом перед push (ядро: core.hooksPath=scripts/hooks).
+# Полный цикл: mvn verify (тесты + линтеры сборки) и Docker smoke.
+# Обход: SKIP_SMOKE=1 git push — без smoke; git push --no-verify — полностью.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+echo "==> mvn verify"
+./mvnw -B verify
+
+if [ "${SKIP_SMOKE:-0}" = "1" ]; then
+    echo "==> smoke пропущен (SKIP_SMOKE=1)"
+else
+    scripts/smoke.sh
+fi

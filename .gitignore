@@ -1,0 +1,14 @@
+target/
+.idea/
+*.iml
+.vscode/
+
+# Секреты
+.env
+
+# Локальные данные (SQLite)
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

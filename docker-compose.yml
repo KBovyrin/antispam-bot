@@ -1,0 +1,25 @@
+services:
+  antispam-bot:
+    build: .
+    container_name: antispam-bot
+    restart: unless-stopped
+    # Spring гасит polling через @PreDestroy — даём ему больше дефолтных 10 секунд
+    stop_grace_period: 30s
+    env_file: .env
+    environment:
+      DB_URL: jdbc:sqlite:/data/antispam.db
+    healthcheck:
+      # Только liveness процесса: зависший polling этот чек не ловит — осознанный
+      # трейд-офф (полный healthcheck потребовал бы актуатора). pgrep -x: точное
+      # имя процесса java; -f с "app.jar" матчило бы сам healthcheck-шелл
+      test: ["CMD-SHELL", "pgrep -x java || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      # Named volume: права внутри контейнера настраивает Docker (пользователь bot, не root)
+      - antispam-data:/data
+
+volumes:
+  antispam-data:
