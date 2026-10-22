@@ -57,7 +57,9 @@ public class EnforcementService {
             banned = true;
         } catch (RuntimeException e) {
             banned = false;
-            log.error("BAN_FAILED chat={} user={} username={}: {}", chatId, userId, username, e.getMessage());
+            // BAN_API_ERROR — причина сбоя вызова (диагностика); событие-аудит
+            // BAN_FAILED пишет AdminNotifierImpl, не дублируем
+            log.error("BAN_API_ERROR chat={} user={} username={}: {}", chatId, userId, username, e.getMessage());
         }
         if (banned) {
             for (MessageRef message : messages) {
@@ -83,12 +85,13 @@ public class EnforcementService {
                 log.error("BAN_DB_UPDATE_FAILED chat={} user={} username={}: {}",
                         chatId, userId, username, e.getMessage());
             }
+            // N5: аудит пишет AdminNotifier (VIOLATION/BAN_FAILED — всегда, независимо
+            // от настроек уведомлений); summary-строка здесь дублировала бы его
             adminNotifier.violation(chatId, userId, username, reason);
         } else {
             // Статус в БД не меняем: пользователь всё ещё может писать
             adminNotifier.banFailed(chatId, userId, username, reason);
         }
-        log.warn("BAN chat={} user={} username={} reason={} banned={}", chatId, userId, username, reason, banned);
         return banned;
     }
 }

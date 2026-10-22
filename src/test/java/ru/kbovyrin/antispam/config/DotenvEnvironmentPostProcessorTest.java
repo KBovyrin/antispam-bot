@@ -104,4 +104,22 @@ class DotenvEnvironmentPostProcessorTest {
         // # внутри кавычек не коммент
         assertThat(environment.getProperty("QUOTED")).isEqualTo("a # b");
     }
+
+    @Test
+    void dotenvStillAppliedWhenSystemEnvironmentSourceAbsent() throws Exception {
+        // N11: в средах без источника systemEnvironment addAfter молча ничего
+        // не добавлял — .env тихо не работал
+        Files.writeString(tempDir.resolve(".env"), "BOT_TOKEN=123456:abc\n");
+        ConfigurableEnvironment environment = new StandardEnvironment();
+        environment.getPropertySources().remove("systemEnvironment");
+
+        processor.load(environment, tempDir.resolve(".env"));
+
+        assertThat(environment.getProperty("BOT_TOKEN")).isEqualTo("123456:abc");
+        // .env ниже systemProperties: системные свойства продолжают выигрывать
+        var systemProperties = environment.getPropertySources().get("systemProperties");
+        var dotenv = environment.getPropertySources().get("dotenv");
+        assertThat(environment.getPropertySources().precedenceOf(systemProperties))
+                .isLessThan(environment.getPropertySources().precedenceOf(dotenv));
+    }
 }

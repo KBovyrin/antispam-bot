@@ -20,7 +20,7 @@ public class BotUpdateReceiver extends org.telegram.telegrambots.bots.TelegramLo
     private final UpdateRouter router;
 
     public BotUpdateReceiver(AntispamProperties properties, UpdateRouter router) {
-        super();
+        super(BotHttpOptions.create());
         this.properties = properties;
         this.router = router;
     }
@@ -42,7 +42,8 @@ public class BotUpdateReceiver extends org.telegram.telegrambots.bots.TelegramLo
         } catch (RuntimeException e) {
             // Не даём одной ошибке остановить цикл polling.
             // В лог не пишем тело обновления — это тексты сообщений людей (N5)
-            log.error("Ошибка обработки обновления {}: {}", update.getUpdateId(), e.toString(), e);
+            // Стек в третьем аргументе уже содержит тип и сообщение — без дубля
+            log.error("Ошибка обработки обновления {}", update.getUpdateId(), e);
         }
     }
 }

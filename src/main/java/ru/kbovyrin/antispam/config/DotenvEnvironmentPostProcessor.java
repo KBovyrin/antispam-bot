@@ -38,9 +38,18 @@ public class DotenvEnvironmentPostProcessor implements EnvironmentPostProcessor 
             return;
         }
         if (!values.isEmpty()) {
-            // После systemEnvironment: окружение важнее файла
-            environment.getPropertySources().addAfter("systemEnvironment",
-                    new MapPropertySource("dotenv", values));
+            // После systemEnvironment: окружение важнее файла. Источников может
+            // не быть (экзотические среды) — тогда ниже системных свойств,
+            // но выше дефолтов application.yml; иначе .env тихо терялся (N11)
+            if (environment.getPropertySources().contains("systemEnvironment")) {
+                environment.getPropertySources().addAfter("systemEnvironment",
+                        new MapPropertySource("dotenv", values));
+            } else if (environment.getPropertySources().contains("systemProperties")) {
+                environment.getPropertySources().addAfter("systemProperties",
+                        new MapPropertySource("dotenv", values));
+            } else {
+                environment.getPropertySources().addFirst(new MapPropertySource("dotenv", values));
+            }
         }
     }
 

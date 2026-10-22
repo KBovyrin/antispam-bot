@@ -28,7 +28,7 @@ public class TelegramBotAdapter extends org.telegram.telegrambots.bots.TelegramL
     private final AntispamProperties properties;
 
     public TelegramBotAdapter(AntispamProperties properties) {
-        super();
+        super(BotHttpOptions.create());
         this.properties = properties;
     }
 

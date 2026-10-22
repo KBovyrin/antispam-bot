@@ -126,6 +126,21 @@ class CaptchaServiceTest {
     }
 
     @Test
+    void pendingUserWithChangedUsernameIsRefreshedOnReissue() {
+        stubQuestion();
+        stubCaptchaMessageId();
+        when(repository.findByChatIdAndUserId(CHAT, USER))
+                .thenAnswer(inv -> Optional.of(Participant.newPending(CHAT, USER, "old_name", now)));
+
+        service.handleFirstMessage(CHAT, USER, "new_name", TRIGGER_MSG);
+
+        // /banlist должен показывать актуальный username, а не первый встреченный (N1)
+        var captor = org.mockito.ArgumentCaptor.forClass(Participant.class);
+        verify(repository).save(captor.capture());
+        assertThat(captor.getValue().getUsername()).isEqualTo("new_name");
+    }
+
+    @Test
     void alreadyPassedUserIsNotCheckedAgain() {
         Participant passed = Participant.newPending(CHAT, USER, USERNAME, now);
         passed.pass(now);
@@ -148,10 +163,11 @@ class CaptchaServiceTest {
 
         callback(CaptchaService.callbackData(USER, 2));
 
+        // Единственный save — фиксация PASSED: выдача капчи существующей
+        // неизменённой записи больше не пишется в БД (N1)
         var captor = org.mockito.ArgumentCaptor.forClass(Participant.class);
-        verify(repository, times(2)).save(captor.capture());
-        assertThat(captor.getAllValues().get(0).getStatus()).isEqualTo(Participant.Status.PENDING);
-        assertThat(captor.getAllValues().get(1).getStatus()).isEqualTo(Participant.Status.PASSED);
+        verify(repository, times(1)).save(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(Participant.Status.PASSED);
 
         verify(telegramApi).editMessageText(eq(CHAT), eq(CAPTCHA_MSG), contains("Принято"));
         verify(telegramApi).answerCallbackQuery(eq("cb1"), contains("Принято"));
@@ -177,8 +193,8 @@ class CaptchaServiceTest {
         verify(telegramApi).answerCallbackQuery(eq("cb1"), contains("Неверно"));
         verify(adminNotifier).violation(eq(CHAT), eq(USER), eq(USERNAME), contains("капча"));
         var captor = org.mockito.ArgumentCaptor.forClass(Participant.class);
-        verify(repository, times(2)).save(captor.capture());
-        assertThat(captor.getAllValues().get(1).getStatus()).isEqualTo(Participant.Status.BANNED);
+        verify(repository, times(1)).save(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(Participant.Status.BANNED);
         verify(telegramApi, never()).editMessageText(anyLong(), anyLong(), anyString());
     }
 
@@ -414,6 +430,64 @@ class CaptchaServiceTest {
     }
 
     @Test
+    void correctAnswerAfterFailedWrongBanDoesNotPass() {
+        stubQuestion();
+        stubCaptchaMessageId();
+        stubExistingPendingParticipant();
+        service.handleFirstMessage(CHAT, USER, USERNAME, TRIGGER_MSG);
+        // Бан не проходит (бот потерял права): неверный ответ не должен
+        // открывать перебор — «верная» кнопка после провала не спасает
+        org.mockito.Mockito.doThrow(new RuntimeException("api down"))
+                .when(telegramApi).banChatMember(CHAT, USER);
+
+        callback(CaptchaService.callbackData(USER, 0));
+        callback(CaptchaService.callbackData(USER, 2));
+
+        verify(telegramApi, never()).editMessageText(eq(CHAT), eq(CAPTCHA_MSG), contains("Принято"));
+        verify(telegramApi, times(2)).answerCallbackQuery(eq("cb1"), contains("Неверно"));
+        verify(telegramApi, times(2)).banChatMember(CHAT, USER);
+    }
+
+    @Test
+    void wrongAnswerRetriesAreLimitedWhenBanKeepsFailing() {
+        stubQuestion();
+        stubCaptchaMessageId();
+        stubExistingPendingParticipant();
+        service.handleFirstMessage(CHAT, USER, USERNAME, TRIGGER_MSG);
+        org.mockito.Mockito.doThrow(new RuntimeException("api down"))
+                .when(telegramApi).banChatMember(CHAT, USER);
+
+        callback(CaptchaService.callbackData(USER, 0));
+        callback(CaptchaService.callbackData(USER, 0));
+        callback(CaptchaService.callbackData(USER, 0));
+        // Попытки исчерпаны: сессия снята, дальнейшие нажатия — «истекло»
+        callback(CaptchaService.callbackData(USER, 0));
+
+        verify(telegramApi, times(3)).banChatMember(CHAT, USER);
+        verify(telegramApi).answerCallbackQuery(eq("cb1"), contains("истекло"));
+    }
+
+    @Test
+    void answerFailureAfterFailedBanKeepsSessionForTimeoutRetry() {
+        stubQuestion();
+        stubCaptchaMessageId();
+        stubExistingPendingParticipant();
+        service.handleFirstMessage(CHAT, USER, USERNAME, TRIGGER_MSG);
+        org.mockito.Mockito.doThrow(new RuntimeException("api down"))
+                .when(telegramApi).banChatMember(CHAT, USER);
+        org.mockito.Mockito.doThrow(new RuntimeException("answer failed"))
+                .when(telegramApi).answerCallbackQuery("cb1", "❌ Неверно");
+
+        // Сбой ответа на callback не должен ронять ретрай бана (W2)
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
+                () -> callback(CaptchaService.callbackData(USER, 0)));
+
+        when(telegramApi.getChatMemberStatus(CHAT, USER)).thenReturn("member");
+        service.expireSessions(now.plus(Duration.ofMinutes(6)));
+        verify(telegramApi, times(2)).banChatMember(CHAT, USER);
+    }
+
+    @Test
     void noBanBeforeTimeout() {
         stubQuestion();
         stubSave();
@@ -525,7 +599,7 @@ class CaptchaServiceTest {
     }
 
     @Test
-    void correctAnswerWithoutDbRecordStillAcknowledgesUser() {
+    void correctAnswerWithoutDbRecordCreatesPassedParticipant() {
         stubQuestion();
         stubSave();
         stubCaptchaMessageId();
@@ -534,9 +608,11 @@ class CaptchaServiceTest {
         service.handleFirstMessage(CHAT, USER, USERNAME, TRIGGER_MSG);
         callback(CaptchaService.callbackData(USER, 2));
 
-        // N4: юзер получил «Принято» (повторной капчи на клике не случилось),
-        // записи нет — сохранение PASSED не выполнялось
+        // N2: юзеру показали «Принято» — статус обязан сохраниться, иначе
+        // следующее сообщение внезапно выдаст капчу повторно
         verify(telegramApi).editMessageText(eq(CHAT), eq(CAPTCHA_MSG), contains("Принято"));
-        verify(repository, times(1)).save(any());
+        var captor = org.mockito.ArgumentCaptor.forClass(Participant.class);
+        verify(repository, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues().get(1).getStatus()).isEqualTo(Participant.Status.PASSED);
     }
 }

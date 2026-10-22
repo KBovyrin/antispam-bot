@@ -3,6 +3,15 @@ services:
     build: .
     container_name: antispam-bot
     restart: unless-stopped
+    # Бот лёгкий (~300–500 МБ по замерам DEPLOY §1): 1 ГБ хватает с запасом,
+    # а JVM в контейнере cgroup-aware и сама ограничит heap его долей
+    mem_limit: 1g
+    # Ротация: без неё json-file-логи долгоживущего VPS растут бесконечно (N9)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # Spring гасит polling через @PreDestroy — даём ему больше дефолтных 10 секунд
     stop_grace_period: 30s
     env_file: .env

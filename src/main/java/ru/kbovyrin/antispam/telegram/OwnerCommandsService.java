@@ -1,5 +1,7 @@
 package ru.kbovyrin.antispam.telegram;
 
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -26,6 +28,9 @@ public class OwnerCommandsService {
     private static final int BANLIST_LIMIT = 50;
     /** Лимит символов на одно сообщение /banlist (Telegram: 4096, берём с запасом). */
     private static final int BANLIST_CHAR_LIMIT = 3500;
+    /** Дата бана в /banlist — читаемая человеком, UTC (N3). */
+    private static final DateTimeFormatter BAN_DATE =
+            DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm").withZone(ZoneOffset.UTC);
 
     private static final Logger log = LoggerFactory.getLogger(OwnerCommandsService.class);
 
@@ -80,7 +85,7 @@ public class OwnerCommandsService {
         }
         Long userId = parseUserId(data.substring(UNBAN_CALLBACK_PREFIX.length()));
         if (userId == null) {
-            telegramApi.editMessageText(chatId, messageId, "Не удалось разобрать id пользователя");
+            editOrSend(chatId, messageId, "Не удалось разобрать id пользователя");
             telegramApi.answerCallbackQuery(callbackQueryId, "Ошибка");
             return;
         }
@@ -88,8 +93,22 @@ public class OwnerCommandsService {
         String text = groups == 0
                 ? "Пользователь id=" + userId + " не найден в бан-листе"
                 : "✅ Разбанен в " + groups + " " + pluralGroups(groups);
-        telegramApi.editMessageText(chatId, messageId, text);
+        editOrSend(chatId, messageId, text);
         telegramApi.answerCallbackQuery(callbackQueryId, groups == 0 ? "Не найден" : "Разбанен");
+    }
+
+    /**
+     * Правка текста сообщения-носителя кнопки. Уведомление старше 48 часов
+     * Telegram редактировать не даёт (W4): тогда результат уходит новым
+     * сообщением, а колбэк всё равно получает ответ — без «часиков» у владельца.
+     */
+    private void editOrSend(long chatId, long messageId, String text) {
+        try {
+            telegramApi.editMessageText(chatId, messageId, text);
+        } catch (RuntimeException e) {
+            log.warn("EDIT_FAILED chat={} message={}: {}", chatId, messageId, e.getMessage());
+            telegramApi.sendMessage(chatId, text);
+        }
     }
 
     private boolean isOwner(long chatId, long fromId) {
@@ -116,7 +135,7 @@ public class OwnerCommandsService {
             String name = p.getUsername() == null || p.getUsername().isBlank()
                     ? "id=" + p.getUserId()
                     : "@" + p.getUsername() + " (id=" + p.getUserId() + ")";
-            lines.add("• %s — чат %d — с %s".formatted(name, p.getChatId(), p.getUpdatedAt()));
+            lines.add("• %s — чат %d — с %s UTC".formatted(name, p.getChatId(), BAN_DATE.format(p.getUpdatedAt())));
         }
         int rest = banned.size() - shown.size();
         if (rest > 0) {

@@ -96,6 +96,18 @@ class OwnerCommandsServiceTest {
     }
 
     @Test
+    void banlistShowsHumanReadableDate() {
+        Participant p = Participant.newPending(-100L, 42L, "vasya", java.time.Instant.parse("2026-10-22T10:15:30Z"));
+        p.ban(java.time.Instant.parse("2026-10-22T10:16:00Z"));
+        when(unbanService.bannedParticipants()).thenReturn(List.of(p));
+
+        service.handlePrivateMessage(ADMIN, ADMIN, "/banlist");
+
+        // N3: дата для человека, не сырой ISO-8601 с миллис
+        verify(telegramApi).sendMessage(eq(ADMIN), contains("22.10.2026 10:16 UTC"));
+    }
+
+    @Test
     void longBanlistIsCapped() {
         List<Participant> many = IntStream.rangeClosed(1, 55)
                 .mapToLong(i -> i)
@@ -209,6 +221,20 @@ class OwnerCommandsServiceTest {
         service.handleUnbanCallback(ADMIN, ADMIN, 55L, "unban:42", "cb1");
 
         verify(telegramApi).editMessageText(eq(ADMIN), eq(55L), contains("Разбанен"));
+        verify(telegramApi).answerCallbackQuery(eq("cb1"), anyString());
+    }
+
+    @Test
+    void unbanCallbackEditFailureFallsBackToMessageAndStillAnswers() {
+        when(unbanService.unbanEverywhere(42L)).thenReturn(2);
+        org.mockito.Mockito.doThrow(new RuntimeException("message too old"))
+                .when(telegramApi).editMessageText(eq(ADMIN), eq(55L), anyString());
+
+        service.handleUnbanCallback(ADMIN, ADMIN, 55L, "unban:42", "cb1");
+
+        // Разбан уже применён: сбой правки старого (>48 ч) уведомления не должен
+        // прятать результат и оставлять владельцу «часики» без ответа
+        verify(telegramApi).sendMessage(eq(ADMIN), contains("Разбанен"));
         verify(telegramApi).answerCallbackQuery(eq("cb1"), anyString());
     }
 
