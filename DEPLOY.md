@@ -53,23 +53,29 @@ Firewall: боту нужны только исходящие соединени
 sudo ufw allow OpenSSH && sudo ufw --force enable
 ```
 
-## 4. Перенос проекта (с локальной машины)
+## 4. Клонирование проекта
+
+Проект живёт на GitHub, на VPS клонируется в `/opt`:
 
 ```bash
-rsync -av \
-  --exclude='.git' --exclude='target' --exclude='data' \
-  --exclude='.idea' --exclude='.env' \
-  ~/Документы/AI-Projects/antispam-bot/ \
-  user@VPS_IP:~/antispam-bot/
+ssh user@VPS_IP
+
+# /opt принадлежит root — создаём папку и отдаём её своему пользователю
+sudo mkdir -p /opt/antispam-bot
+sudo chown $USER:$USER /opt/antispam-bot
+
+git clone https://github.com/KBovyrin/antispam-bot.git /opt/antispam-bot
 ```
 
-`.env` создаётся на VPS отдельно и на локальную машину не возвращается.
-После первого коммита в git вместо rsync можно использовать `git clone`.
+Если репозиторий приватный, git спросит логин/пароль — вместо пароля нужен
+Personal Access Token из GitHub (Settings → Developer settings → Tokens).
+
+`.env` создаётся на VPS отдельно (раздел 5) и в git не попадает.
 
 ## 5. Конфигурация (.env на VPS)
 
 ```bash
-cd ~/antispam-bot
+cd /opt/antispam-bot
 cp .env.example .env
 nano .env
 chmod 600 .env      # токен не должен быть читаем другими пользователями VPS
@@ -101,7 +107,7 @@ sed -i '/#/d' .mvn/jvm.config
 ## 6. Запуск
 
 ```bash
-cd ~/antispam-bot
+cd /opt/antispam-bot
 docker compose up -d --build
 ```
 
@@ -131,13 +137,25 @@ docker compose logs -f                     # ждём строку «Long pollin
 ## 8. Обновление бота
 
 ```bash
-# локальная машина: повторить rsync из раздела 4
-# VPS:
-cd ~/antispam-bot
+cd /opt/antispam-bot
+git pull
 docker compose up -d --build      # пересоберёт и подменит контейнер
+docker compose logs -f            # ждём «Long polling запущен для бота @...»
 ```
 
-База данных живёт в named volume `antispam-data` и переживает обновления.
+`.env` и база данных (named volume `antispam-data`) обновления не затрагивают.
+
+Откат на прошлую версию, если что-то пошло не так:
+
+```bash
+git log --oneline -5              # найти предыдущий рабочий коммит
+git checkout <hash>
+docker compose up -d --build
+# после фикса вернуться: git checkout main
+```
+
+Старые образы после нескольких обновлений копятся — периодически
+`docker image prune -f`.
 
 ### Вариант для слабого VPS (1–2 ГБ): собрать образ локально
 
@@ -165,12 +183,14 @@ docker load -i antispam-bot.tar.gz
 
 ```bash
 # бэкап (выполняется на VPS, файл появится в текущей директории)
+cd /opt/antispam-bot
 docker compose stop
 docker run --rm -v antispam-data:/data -v "$PWD":/backup alpine \
   tar czf "/backup/antispam-db-$(date +%F).tar.gz" -C /data antispam.db
 docker compose start
 
 # восстановление
+cd /opt/antispam-bot
 docker compose stop
 docker run --rm -v antispam-data:/data -v "$PWD":/backup alpine \
   sh -c 'rm -f /data/antispam.db && tar xzf /backup/antispam-db-2026-10-20.tar.gz -C /data'
