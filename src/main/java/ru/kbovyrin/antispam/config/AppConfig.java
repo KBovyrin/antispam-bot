@@ -1,14 +1,16 @@
 package ru.kbovyrin.antispam.config;
 
 import java.time.Clock;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+
+import okhttp3.OkHttpClient;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.scheduling.annotation.EnableScheduling;
-import org.telegram.telegrambots.meta.TelegramBotsApi;
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
-import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
+import org.telegram.telegrambots.longpolling.TelegramBotsLongPollingApplication;
 
 import ru.kbovyrin.antispam.telegram.RateLimitedTelegramApi;
 import ru.kbovyrin.antispam.telegram.TelegramApi;
@@ -25,12 +27,29 @@ public class AppConfig {
     }
 
     /**
-     * Единица API регистрации ботов: сам по себе polling не стартует —
-     * сессии создаются в {@code PollingBootstrap.run()} через registerBot().
+     * Демонический планировщик для сессий long polling (блокер ревью/пентеста P4):
+     * дефолтный supplier библиотеки создаёт НЕ-демон потоки, которые никто не
+     * глушит — JVM висела после закрытия контекста. Демоны умирают сами.
      */
-    @Bean
-    public TelegramBotsApi telegramBotsApi() throws TelegramApiException {
-        return new TelegramBotsApi(DefaultBotSession.class);
+    public static ScheduledExecutorService pollingScheduler() {
+        return Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "bots-longpolling");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    /**
+     * Реестр long-polling сессий (telegrambots 10.x, P4): сессии создаются в
+     * {@code PollingBootstrap.run()} через registerBot(). AutoCloseable —
+     * Spring закрывает реестр при остановке контекста.
+     */
+    @Bean(destroyMethod = "close")
+    public TelegramBotsLongPollingApplication botsApplication() {
+        return new TelegramBotsLongPollingApplication(
+                com.fasterxml.jackson.databind.ObjectMapper::new,
+                OkHttpClient::new,
+                AppConfig::pollingScheduler);
     }
 
     /** Сырой адаптер над библиотекой (без троттлинга). */

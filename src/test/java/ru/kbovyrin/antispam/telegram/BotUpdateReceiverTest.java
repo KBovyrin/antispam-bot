@@ -24,7 +24,7 @@ class BotUpdateReceiverTest {
         BotUpdateReceiver receiver = new BotUpdateReceiver(props, router);
 
         // Исключение из роутера проглатывается — polling продолжает работать
-        receiver.onUpdateReceived(new Update());
+        receiver.consume(new Update());
 
         verify(router).route(any(Update.class));
     }

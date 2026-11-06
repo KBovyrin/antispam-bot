@@ -28,7 +28,9 @@
 
 ## Стек
 
-Java 21, Spring Boot 3, telegrambots (long polling), SQLite, Docker.
+Java 21, Spring Boot 3, telegrambots 10.3 (long polling, `telegrambots-longpolling`
++ `telegrambots-client` OkHttp; миграция P4 2026-11 с 6.9.7 — мёртвый Jersey/Grizzly
+webhook-стек покинул зависимости), SQLite, Docker.
 
 ## Настройка
 

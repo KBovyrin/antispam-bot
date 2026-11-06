@@ -10,17 +10,22 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
-import org.telegram.telegrambots.meta.TelegramBotsApi;
+import org.telegram.telegrambots.longpolling.BotSession;
+import org.telegram.telegrambots.longpolling.TelegramBotsLongPollingApplication;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
-import org.telegram.telegrambots.meta.generics.BotSession;
 
 import jakarta.annotation.PreDestroy;
 import ru.kbovyrin.antispam.config.AntispamProperties;
 
 /**
- * Регистрирует long polling при старте приложения, если бот включён.
- * При остановке контекста останавливает сессию (W4): иначе потоки
- * DefaultBotSession держат JVM до SIGKILL и теряется плавность обновлений.
+ * Регистрирует long polling при старте приложения (telegrambots 10.x, P4), если
+ * бот включён. При остановке контекста глушит сессию полностью (W4): в 10.3.0
+ * stop() лишь отменяет цикл — executor сессии держит JVM, поэтому гасим и его
+ * (плюс демонические потоки реестра, см. AppConfig.pollingScheduler).
+ * <p>
+ * Таймауты/бэкофф сети — на стороне библиотеки (OkHttp: исходящие 10с,
+ * long poll 75/100/70с + ExponentialBackOff), собственный BotHttpOptions
+ * ушёл вместе с Apache HttpClient из 6.x.
  */
 @Component
 public class PollingBootstrap implements ApplicationRunner {
@@ -29,14 +34,15 @@ public class PollingBootstrap implements ApplicationRunner {
 
     private final AntispamProperties properties;
     private final BotUpdateReceiver receiver;
-    private final TelegramBotsApi botsApi;
+    private final TelegramBotsLongPollingApplication botsApplication;
 
     private volatile BotSession session;
 
-    public PollingBootstrap(AntispamProperties properties, BotUpdateReceiver receiver, TelegramBotsApi botsApi) {
+    public PollingBootstrap(AntispamProperties properties, BotUpdateReceiver receiver,
+                            TelegramBotsLongPollingApplication botsApplication) {
         this.properties = properties;
         this.receiver = receiver;
-        this.botsApi = botsApi;
+        this.botsApplication = botsApplication;
     }
 
     @Override
@@ -52,7 +58,8 @@ public class PollingBootstrap implements ApplicationRunner {
         if (properties.groupIds().isEmpty()) {
             log.warn("GROUP_IDS пуст — бот запущен, но не отслеживает ни одну группу");
         }
-        session = botsApi.registerBot(receiver);
+        session = botsApplication.registerBot(properties.botToken(), receiver);
+        // registerBot в 10.x сам стартует сессию (nit ревью P4)
         log.info("Long polling запущен для бота @{}", properties.botUsername());
     }
 
@@ -84,6 +91,10 @@ public class PollingBootstrap implements ApplicationRunner {
         }
         try {
             current.stop();
+            // Блокер ревью/пентеста P4: в 10.3.0 stop() лишь отменяет polling,
+            // executor сессии никто не глушит (даже close()) — глушим сами,
+            // иначе JVM виснет после закрытия контекста до SIGKILL
+            current.getExecutor().shutdownNow();
             log.info("Long polling остановлен");
         } catch (RuntimeException e) {
             log.error("Не удалось остановить long polling: {}", e.getMessage());

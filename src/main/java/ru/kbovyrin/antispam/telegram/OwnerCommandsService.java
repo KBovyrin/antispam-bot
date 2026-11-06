@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
 
 import ru.kbovyrin.antispam.config.AntispamProperties;
 import ru.kbovyrin.antispam.db.Participant;
@@ -46,11 +47,13 @@ public class OwnerCommandsService {
 
     /** Клавиатура с кнопкой разбана для уведомления о бане. */
     public static InlineKeyboardMarkup unbanKeyboard(long userId) {
-        InlineKeyboardButton button = new InlineKeyboardButton("Разбанить");
-        button.setCallbackData(UNBAN_CALLBACK_PREFIX + userId);
-        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
-        markup.setKeyboard(List.of(List.of(button)));
-        return markup;
+        InlineKeyboardButton button = InlineKeyboardButton.builder()
+                .text("Разбанить")
+                .callbackData(UNBAN_CALLBACK_PREFIX + userId)
+                .build();
+        return InlineKeyboardMarkup.builder()
+                .keyboard(List.of(new InlineKeyboardRow(button)))
+                .build();
     }
 
     /** Приватное сообщение владельца. Не-команды и чужие отправители игнорируются. */

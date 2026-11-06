@@ -2,56 +2,58 @@ package ru.kbovyrin.antispam.telegram;
 
 import java.util.List;
 
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.groupadministration.BanChatMember;
 import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatAdministrators;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatMember;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.UnbanChatMember;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.DeleteMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
+import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.chatmember.ChatMember;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.meta.api.objects.Message;
-import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+import org.telegram.telegrambots.meta.generics.TelegramClient;
+import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient;
 
 import ru.kbovyrin.antispam.config.AntispamProperties;
 
 /**
- * Реализация TelegramApi поверх библиотеки telegrambots.
- * В polling-цикле не участвует (регистрируется только BotUpdateReceiver):
- * класс-носитель execute() из TelegramLongPollingBot, но только исходящие вызовы.
+ * Реализация TelegramApi поверх telegrambots-client 10.x (P4 миграция 2026-11):
+ * исходящие вызовы идут через {@link OkHttpTelegramClient}, долг бота библиотека
+ * больше не требует. В polling-цикле не участвует (регистрируется только
+ * BotUpdateReceiver).
  * <p>
- * Бин объявлен в AppConfig; сервисы получают его в обёртке RateLimitedTelegramApi.
+ * Бин объявлен ТОЛЬКО в AppConfig (шов-конструктор для тестов), @Service
+ * не ставится — двойная регистрация (warn ревью P4).
  */
-public class TelegramBotAdapter extends org.telegram.telegrambots.bots.TelegramLongPollingBot implements TelegramApi {
+public class TelegramBotAdapter implements TelegramApi {
 
     private final AntispamProperties properties;
+    private final TelegramClient client;
 
     public TelegramBotAdapter(AntispamProperties properties) {
-        super(BotHttpOptions.create());
-        this.properties = properties;
+        this(properties, new OkHttpTelegramClient(properties.botToken()));
     }
 
-    @Override
+    /** Шов конструктора: тесты подставляют мок TelegramClient вместо сети. */
+    TelegramBotAdapter(AntispamProperties properties, TelegramClient client) {
+        this.properties = properties;
+        this.client = client;
+    }
+
+    /** Имя бота для диагностики. */
     public String getBotUsername() {
         return properties.botUsername();
     }
 
     @Override
-    public String getBotToken() {
-        return properties.botToken();
-    }
-
-    @Override
-    public void onUpdateReceived(Update update) {
-        // Адаптер не зарегистрирован в polling — обновления сюда не приходят.
-    }
-
-    @Override
     public long sendMessage(long chatId, String text, InlineKeyboardMarkup keyboard) {
         try {
-            Message sent = execute(SendMessage.builder()
+            Message sent = client.execute(SendMessage.builder()
                     .chatId(chatId)
                     .text(text)
                     .replyMarkup(keyboard)
@@ -70,7 +72,7 @@ public class TelegramBotAdapter extends org.telegram.telegrambots.bots.TelegramL
     @Override
     public void editMessageText(long chatId, long messageId, String text) {
         try {
-            execute(EditMessageText.builder()
+            client.execute(EditMessageText.builder()
                     .chatId(chatId)
                     .messageId((int) messageId)
                     .text(text)
@@ -83,7 +85,7 @@ public class TelegramBotAdapter extends org.telegram.telegrambots.bots.TelegramL
     @Override
     public void deleteMessage(long chatId, long messageId) {
         try {
-            execute(DeleteMessage.builder()
+            client.execute(DeleteMessage.builder()
                     .chatId(chatId)
                     .messageId((int) messageId)
                     .build());
@@ -95,7 +97,7 @@ public class TelegramBotAdapter extends org.telegram.telegrambots.bots.TelegramL
     @Override
     public void banChatMember(long chatId, long userId) {
         try {
-            execute(BanChatMember.builder()
+            client.execute(BanChatMember.builder()
                     .chatId(chatId)
                     .userId(userId)
                     .build());
@@ -107,7 +109,7 @@ public class TelegramBotAdapter extends org.telegram.telegrambots.bots.TelegramL
     @Override
     public void unbanChatMember(long chatId, long userId) {
         try {
-            execute(org.telegram.telegrambots.meta.api.methods.groupadministration.UnbanChatMember.builder()
+            client.execute(UnbanChatMember.builder()
                     .chatId(chatId)
                     .userId(userId)
                     .onlyIfBanned(true)
@@ -120,7 +122,7 @@ public class TelegramBotAdapter extends org.telegram.telegrambots.bots.TelegramL
     @Override
     public String getChatMemberStatus(long chatId, long userId) {
         try {
-            ChatMember member = execute(org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatMember.builder()
+            ChatMember member = client.execute(GetChatMember.builder()
                     .chatId(chatId)
                     .userId(userId)
                     .build());
@@ -133,7 +135,7 @@ public class TelegramBotAdapter extends org.telegram.telegrambots.bots.TelegramL
     @Override
     public List<Long> getChatAdminIds(long chatId) {
         try {
-            List<ChatMember> administrators = execute(GetChatAdministrators.builder()
+            List<ChatMember> administrators = client.execute(GetChatAdministrators.builder()
                     .chatId(chatId)
                     .build());
             return administrators.stream()
@@ -147,7 +149,7 @@ public class TelegramBotAdapter extends org.telegram.telegrambots.bots.TelegramL
     @Override
     public void answerCallbackQuery(String callbackQueryId, String text) {
         try {
-            execute(AnswerCallbackQuery.builder()
+            client.execute(AnswerCallbackQuery.builder()
                     .callbackQueryId(callbackQueryId)
                     .text(text)
                     .build());

@@ -19,9 +19,22 @@
 
   <properties>
     <java.version>21</java.version>
-    <telegrambots.version>6.9.7.1</telegrambots.version>
+    <telegrambots.version>10.3.0</telegrambots.version>
     <sqlite-jdbc.version>3.53.4.0</sqlite-jdbc.version>
+    <okhttp.version>4.12.1</okhttp.version>
   </properties>
+
+  <!-- CVE-2026-111943: okhttp 4.12.0 (из Bots:10.3.0) не блокирует
+       скомпрометированные CA — пинм 4.12.1 (пентест P4) -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.squareup.okhttp3</groupId>
+        <artifactId>okhttp</artifactId>
+        <version>${okhttp.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
     <dependency>
@@ -31,7 +44,12 @@
 
     <dependency>
       <groupId>org.telegram</groupId>
-      <artifactId>telegrambots</artifactId>
+      <artifactId>telegrambots-longpolling</artifactId>
+      <version>${telegrambots.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.telegram</groupId>
+      <artifactId>telegrambots-client</artifactId>
       <version>${telegrambots.version}</version>
     </dependency>
 

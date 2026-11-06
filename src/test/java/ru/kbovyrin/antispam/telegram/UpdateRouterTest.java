@@ -21,8 +21,8 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import ru.kbovyrin.antispam.captcha.CaptchaService;
 import ru.kbovyrin.antispam.config.AntispamProperties;
 import ru.kbovyrin.antispam.moderation.LinkModerationService;
-import org.telegram.telegrambots.meta.api.objects.Chat;
-import org.telegram.telegrambots.meta.api.objects.Message;
+import org.telegram.telegrambots.meta.api.objects.chat.Chat;
+import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.User;
 
 @ExtendWith(MockitoExtension.class)
@@ -49,27 +49,15 @@ class UpdateRouterTest {
     }
 
     private static User user(long id, String username, boolean bot) {
-        User u = new User();
-        u.setId(id);
-        u.setUserName(username);
-        u.setIsBot(bot);
-        return u;
+        return User.builder().id(id).firstName("u" + id).userName(username).isBot(bot).build();
     }
 
     private static Chat chat(long id) {
-        Chat c = new Chat();
-        c.setId(id);
-        c.setType("group");
-        return c;
+        return new Chat(id, "group");
     }
 
     private static Message message(User from, long chatId, String text) {
-        Message m = new Message();
-        m.setMessageId(5);
-        m.setChat(chat(chatId));
-        m.setFrom(from);
-        m.setText(text);
-        return m;
+        return Message.builder().messageId(5).chat(chat(chatId)).from(from).text(text).build();
     }
 
     private static Update updateWithMessage(Message message) {
@@ -153,11 +141,10 @@ class UpdateRouterTest {
 
     @Test
     void captionIsCheckedByModeration() {
-        Message media = new Message();
-        media.setMessageId(7);
-        media.setChat(chat(CHAT));
-        media.setFrom(user(42L, "vasya", false));
-        media.setCaption("https://spam.example дешево");
+        Message media = Message.builder().messageId(7).chat(chat(CHAT))
+                .from(user(42L, "vasya", false))
+                .caption("https://spam.example дешево")
+                .build();
 
         router.route(updateWithMessage(media));
 

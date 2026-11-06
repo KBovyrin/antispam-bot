@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
 
 import ru.kbovyrin.antispam.config.AntispamProperties;
 import ru.kbovyrin.antispam.db.Participant;
@@ -408,14 +409,13 @@ public class CaptchaService {
     }
 
     private InlineKeyboardMarkup keyboard(long userId, CaptchaQuestion question) {
-        List<InlineKeyboardButton> row = new ArrayList<>();
+        InlineKeyboardRow row = new InlineKeyboardRow();
         for (int i = 0; i < question.options().size(); i++) {
-            InlineKeyboardButton button = new InlineKeyboardButton(question.options().get(i));
-            button.setCallbackData(callbackData(userId, i));
-            row.add(button);
+            row.add(InlineKeyboardButton.builder()
+                    .text(question.options().get(i))
+                    .callbackData(callbackData(userId, i))
+                    .build());
         }
-        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
-        markup.setKeyboard(List.of(row));
-        return markup;
+        return InlineKeyboardMarkup.builder().keyboard(List.of(row)).build();
     }
 }
