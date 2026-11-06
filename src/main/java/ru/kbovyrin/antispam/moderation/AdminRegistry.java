@@ -36,6 +36,9 @@ public class AdminRegistry {
     private static final Duration TTL = Duration.ofSeconds(60);
     private static final Duration UNKNOWN_TTL = Duration.ofSeconds(15);
 
+    /** Трёхзначный статус админства: UNKNOWN — данные недоступны (сбой API). */
+    public enum AdminState { ADMIN, NOT_ADMIN, UNKNOWN }
+
     private final Clock clock;
     private final TelegramApi telegramApi;
 
@@ -50,7 +53,20 @@ public class AdminRegistry {
         this.telegramApi = telegramApi;
     }
 
+    /**
+     * Fail-open для капчи (W2): при UNKNOWN никого не наказываем.
+     * Модерация ссылок использует трёхзначный {@link #adminState} (P2 2026-11).
+     */
     public boolean isAdmin(long chatId, long userId) {
+        return adminState(chatId, userId) != AdminState.NOT_ADMIN;
+    }
+
+    /**
+     * Статус админства для модерации (P2 2026-11): UNKNOWN позволяет не банить,
+     * но и не пропускать нарушение — удалить его без наказания автора
+     * (виновен может оказаться админ, чей список недоступен).
+     */
+    public AdminState adminState(long chatId, long userId) {
         Instant now = clock.instant();
         CachedAdmins cached = cache.get(chatId);
         if (needsRefresh(cached, now)) {
@@ -71,7 +87,10 @@ public class AdminRegistry {
             }
         }
         List<Long> ids = cache.get(chatId).ids();
-        return ids == null || ids.contains(userId);
+        if (ids == null) {
+            return AdminState.UNKNOWN;
+        }
+        return ids.contains(userId) ? AdminState.ADMIN : AdminState.NOT_ADMIN;
     }
 
     private static boolean needsRefresh(CachedAdmins cached, Instant now) {

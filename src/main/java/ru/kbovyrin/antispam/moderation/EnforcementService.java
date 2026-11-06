@@ -72,13 +72,15 @@ public class EnforcementService {
             }
             try {
                 // Запись создаётся и при бане «с холодного старта» (ссылка в первом
-                // сообщении): иначе /banlist и /unban не увидят забаненного
-                repository.findByChatIdAndUserId(chatId, userId).ifPresentOrElse(
-                        participant -> {
-                            participant.ban(clock.instant());
-                            repository.save(participant);
-                        },
-                        () -> repository.save(Participant.newBanned(chatId, userId, username, clock.instant())));
+                // сообщении): иначе /banlist и /unban не увидят забаненного.
+                // Существующая запись — только точечными UPDATE (статус и username
+                // раздельно): save всей сущности мог откатить username, применённый
+                // параллельным updateUsername (nit ревью диффа 2026-11)
+                if (repository.markBanned(chatId, userId, clock.instant()) == 0) {
+                    repository.save(Participant.newBanned(chatId, userId, username, clock.instant()));
+                } else if (username != null && !username.isBlank()) {
+                    repository.updateUsername(chatId, userId, username, clock.instant());
+                }
             } catch (RuntimeException e) {
                 // Бан в Telegram применён — сбой БД не должен ронять наказание;
                 // рассинхрон виден в логах и лечится следующим нарушением/разбаном

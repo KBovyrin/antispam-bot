@@ -33,10 +33,16 @@ public class CaptchaService {
     public static final String CALLBACK_PREFIX = "captcha:";
     /** Лимит попыток бана одной сессии капчи (защита от шторма уведомлений). */
     static final int MAX_BAN_ATTEMPTS = 3;
+    /**
+     * Лимит отслеживаемых сообщений сессии: шторм в 5-минутном окне капчи не должен
+     * превращаться в сотню deleteMessage (N1 ревью 2026-11) — удаляем последние N.
+     */
+    static final int MAX_TRACKED_MESSAGES = 30;
 
     private static final Logger log = LoggerFactory.getLogger(CaptchaService.class);
 
     private final AntispamProperties properties;
+    private final ru.kbovyrin.antispam.config.CaptchaScoringProperties scoring;
     private final Clock clock;
     private final ParticipantRepository repository;
     private final TelegramApi telegramApi;
@@ -47,10 +53,13 @@ public class CaptchaService {
     /** Активные сессии капчи. Переживать рестарт не обязана: новичку просто зададут вопрос заново. */
     private final Map<SessionKey, CaptchaSession> sessions = new ConcurrentHashMap<>();
 
-    public CaptchaService(AntispamProperties properties, Clock clock, ParticipantRepository repository,
+    public CaptchaService(AntispamProperties properties,
+                          ru.kbovyrin.antispam.config.CaptchaScoringProperties scoring,
+                          Clock clock, ParticipantRepository repository,
                           TelegramApi telegramApi, EnforcementService enforcement, CaptchaQuestions questions,
                           AdminRegistry adminRegistry) {
         this.properties = properties;
+        this.scoring = scoring;
         this.clock = clock;
         this.repository = repository;
         this.telegramApi = telegramApi;
@@ -64,6 +73,7 @@ public class CaptchaService {
 
     private static final class CaptchaSession {
         private final String username;
+        private final Instant createdAt;
         private final Instant expiresAt;
         private final int correctIndex;
         /** Все сообщения пользователя за время капчи: удаляются при бане. */
@@ -72,18 +82,28 @@ public class CaptchaService {
         private long captchaMessageId;
         /** Число неудачных попыток бана (ретраи таймаута и повторных нажатий). */
         private int banAttempts;
+        /** Число сбоев проверки статуса (отдельный бюджет — не съедает попытки бана). */
+        private int statusAttempts;
         /** true после первого неверного ответа: дальнейшие кнопки (даже верные) — к бану. */
         private boolean wrongAnswered;
 
-        private CaptchaSession(String username, Instant expiresAt, int correctIndex) {
+        private CaptchaSession(String username, Instant createdAt, Instant expiresAt, int correctIndex) {
             this.username = username;
+            this.createdAt = createdAt;
             this.expiresAt = expiresAt;
             this.correctIndex = correctIndex;
         }
 
         private void trackMessage(long messageId) {
             messageIds.add(messageId);
+            while (messageIds.size() > MAX_TRACKED_MESSAGES) {
+                messageIds.remove(0);
+            }
+            floodCount++;
         }
+
+        /** Счётчик шторма: не упирается в кап списка удаления (warn ревью P3). */
+        private int floodCount;
 
         private void markIssued(long messageId) {
             this.captchaMessageId = messageId;
@@ -111,22 +131,32 @@ public class CaptchaService {
         if (active != null) {
             // Капча уже выдана — просто запоминаем сообщение, чтобы удалить при бане
             active.trackMessage(triggerMessageId);
+            // P3: шторм сообщений до ответа — бан не дожидаясь таймаута.
+            // Счётчик отдельный от (упирающегося в кап) списка удаления
+            if (active.floodCount >= scoring.floodBanThreshold() && sessions.remove(key, active)) {
+                log.warn("CAPTCHA_FLOOD chat={} user={} username={} messages={}",
+                        chatId, userId, username, active.floodCount);
+                active.wrongAnswered = true;
+                punishSession(key, active, "провалена капча (шторм сообщений до ответа)");
+            }
             return;
         }
         Optional<Participant> existing = repository.findByChatIdAndUserId(chatId, userId);
         if (existing.isPresent() && existing.get().getStatus() != Participant.Status.PENDING) {
             return;
         }
-        // N1: save только при реальном изменении (новая запись или сменившийся
-        // username — иначе /banlist показывал бы имя из самого первого сообщения)
-        Participant participant = existing.orElseGet(() -> Participant.newPending(chatId, userId, username, clock.instant()));
-        if (existing.isEmpty() || !Objects.equals(participant.getUsername(), username)) {
-            participant.updateUsername(username, clock.instant());
-            repository.save(participant);
+        if (existing.isEmpty()) {
+            repository.save(Participant.newPending(chatId, userId, username, clock.instant()));
+        } else if (!Objects.equals(existing.get().getUsername(), username)) {
+            // N1/W2: /banlist должен показывать актуальный username, но менять его у
+            // существующей записи обязана точечная UPDATE-команда — save всей сущности
+            // мог затереть параллельно записанный BANNED, и /unban перестал бы видеть
+            // забаненного (гонка аудита 2026-11)
+            repository.updateUsername(chatId, userId, username, clock.instant());
         }
 
         CaptchaQuestion question = questions.next();
-        CaptchaSession session = new CaptchaSession(username,
+        CaptchaSession session = new CaptchaSession(username, clock.instant(),
                 clock.instant().plus(properties.captcha().timeout()), question.correctOptionIndex());
         session.trackMessage(triggerMessageId);
         // N3: сессия регистрируется ДО отправки — ответ в микросекундном окне между
@@ -151,7 +181,12 @@ public class CaptchaService {
      */
     public void handleCallback(long chatId, long userId, String data, String callbackQueryId) {
         ParsedCallback parsed = parse(data);
-        if (parsed == null || parsed.userId() != userId) {
+        if (parsed == null) {
+            // Мусорный callback_data (шторм сфабрикованных юзерботом запросов) не
+            // должен расходовать лимит ответов Bot API — тихо игнорируем (аудит 2026-11)
+            return;
+        }
+        if (parsed.userId() != userId) {
             telegramApi.answerCallbackQuery(callbackQueryId, "Эта кнопка не для вас");
             return;
         }
@@ -161,7 +196,11 @@ public class CaptchaService {
             telegramApi.answerCallbackQuery(callbackQueryId, "Время капчи истекло");
             return;
         }
-        if (!session.wrongAnswered && parsed.optionIndex() == session.correctIndex) {
+        boolean correct = parsed.optionIndex() == session.correctIndex;
+        // P3: верный ответ раньше minAnswerTime — машинный подбор, не человек
+        boolean tooFast = correct && !session.wrongAnswered
+                && clock.instant().isBefore(session.createdAt.plus(scoring.minAnswerTime()));
+        if (correct && !session.wrongAnswered && !tooFast) {
             // N2: записи может не быть (БД чистилась) — «Принято» должно означать
             // сохранённый PASSED, иначе следующее сообщение выдаст капчу повторно
             Participant participant = repository.findByChatIdAndUserId(chatId, userId)
@@ -179,28 +218,39 @@ public class CaptchaService {
             // W1: первый неверный ответ проваливает капчу — дальше любая кнопка
             // (в т.ч. «верная») ведёт к бану: при сбое бана перебор не спасает
             session.wrongAnswered = true;
-            boolean banned = false;
-            try {
-                banned = enforcement.ban(chatId, userId, session.username, "провалена капча (неверный ответ)",
-                        sessionMessages(chatId, session));
-            } catch (RuntimeException e) {
-                log.error("BAN_ERROR chat={} user={}: {}", chatId, userId, e.getMessage());
-            }
-            if (!banned) {
-                // W2: сначала возвращаем сессию, затем отвечаем на callback —
-                // сбой ответа не должен терять ретрай бана. Лимит попыток общий
-                // с таймаут-путём, иначе каждое нажатие штормит API и админа
-                if (session.banAttempts >= MAX_BAN_ATTEMPTS - 1) {
-                    log.error("BAN_GAVE_UP chat={} user={} username={}: {} попыток",
-                            chatId, userId, session.username, MAX_BAN_ATTEMPTS);
-                } else {
-                    session.banAttempts++;
-                    // putIfAbsent: за окно failing-бана юзер мог написать новое сообщение,
-                    // и handleFirstMessage уже создал свежую сессию — не затираем её
-                    sessions.putIfAbsent(key, session);
-                }
-            }
+            punishSession(key, session, tooFast
+                    ? "провалена капча (мгновенный ответ — машинный подбор)"
+                    : "провалена капча (неверный ответ)");
             telegramApi.answerCallbackQuery(callbackQueryId, "❌ Неверно");
+        }
+    }
+
+    /**
+     * Бан со всеми сообщениями сессии; при сбое бана сессия возвращается в карту
+     * для ретрая (общий лимит {@value #MAX_BAN_ATTEMPTS} попыток). Общий путь
+     * неверного ответа (P3) и шторма сообщений.
+     */
+    private void punishSession(SessionKey key, CaptchaSession session, String reason) {
+        boolean banned = false;
+        try {
+            banned = enforcement.ban(key.chatId(), key.userId(), session.username, reason,
+                    sessionMessages(key.chatId(), session));
+        } catch (RuntimeException e) {
+            log.error("BAN_ERROR chat={} user={}: {}", key.chatId(), key.userId(), e.getMessage());
+        }
+        if (banned) {
+            return;
+        }
+        // W2: сначала возвращаем сессию, затем отвечаем на callback — сбой ответа
+        // не должен терять ретрай бана. Лимит попыток общий с таймаут-путём
+        if (session.banAttempts >= MAX_BAN_ATTEMPTS - 1) {
+            log.error("BAN_GAVE_UP chat={} user={} username={}: {} попыток",
+                    key.chatId(), key.userId(), session.username, MAX_BAN_ATTEMPTS);
+        } else {
+            session.banAttempts++;
+            // putIfAbsent: за окно failing-бана юзер мог написать новое сообщение,
+            // и handleFirstMessage уже создал свежую сессию — не затираем её
+            sessions.putIfAbsent(key, session);
         }
     }
 
@@ -230,6 +280,17 @@ public class CaptchaService {
         try {
             status = telegramApi.getChatMemberStatus(key.chatId(), key.userId());
         } catch (RuntimeException e) {
+            // W3 (аудит 2026-11): стойкий сбой проверки статуса не должен вечно держать
+            // сессию и штормить getChatMember на каждом тике планировщика. Бюджет
+            // отдельного счётчика — сбои проверки не съедают попытки бана (ревью диффа)
+            if (session.statusAttempts >= MAX_BAN_ATTEMPTS - 1) {
+                if (sessions.remove(key, session)) {
+                    log.error("STATUS_CHECK_GAVE_UP chat={} user={} username={}: {} попыток",
+                            key.chatId(), key.userId(), session.username, MAX_BAN_ATTEMPTS);
+                }
+                return;
+            }
+            session.statusAttempts++;
             // Не знаем, в чате ли юзер — сессию не снимаем, повтор на следующем тике
             log.error("CHAT_MEMBER_CHECK_FAILED chat={} user={}: {}", key.chatId(), key.userId(), e.getMessage());
             return;

@@ -21,8 +21,9 @@ import ru.kbovyrin.antispam.config.AntispamProperties;
  * Реализация TelegramApi поверх библиотеки telegrambots.
  * В polling-цикле не участвует (регистрируется только BotUpdateReceiver):
  * класс-носитель execute() из TelegramLongPollingBot, но только исходящие вызовы.
+ * <p>
+ * Бин объявлен в AppConfig; сервисы получают его в обёртке RateLimitedTelegramApi.
  */
-@Component
 public class TelegramBotAdapter extends org.telegram.telegrambots.bots.TelegramLongPollingBot implements TelegramApi {
 
     private final AntispamProperties properties;

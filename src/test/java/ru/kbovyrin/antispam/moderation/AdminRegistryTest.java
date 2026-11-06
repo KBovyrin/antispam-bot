@@ -75,6 +75,25 @@ class AdminRegistryTest {
         assertThat(registry.isAdmin(CHAT, 42L)).isFalse();
     }
 
+    // --- P2 2026-11: трёхзначный статус для модерации ---
+
+    @Test
+    void adminStateDistinguishesAdminAndNotAdmin() {
+        when(telegramApi.getChatAdminIds(CHAT)).thenReturn(List.of(777L));
+
+        assertThat(registry.adminState(CHAT, 777L)).isEqualTo(AdminRegistry.AdminState.ADMIN);
+        assertThat(registry.adminState(CHAT, 42L)).isEqualTo(AdminRegistry.AdminState.NOT_ADMIN);
+    }
+
+    @Test
+    void adminStateIsUnknownOnApiFailure() {
+        doThrow(new RuntimeException("api down")).when(telegramApi).getChatAdminIds(CHAT);
+
+        assertThat(registry.adminState(CHAT, 42L)).isEqualTo(AdminRegistry.AdminState.UNKNOWN);
+        // Капча по-прежнему fail-open (W2): UNKNOWN не должен пропускать под бан
+        assertThat(registry.isAdmin(CHAT, 42L)).isTrue();
+    }
+
     @Test
     void staleCacheIsUsedWhenApiFails() {
         when(telegramApi.getChatAdminIds(CHAT)).thenReturn(List.of(777L));

@@ -25,6 +25,16 @@ antispam:
   admin-chat-id: ${ADMIN_CHAT_ID:0}
   # ID групп обсуждения через запятую
   group-ids: ${GROUP_IDS:}
+  # Троттлинг исходящих и ретрай на 429 (P1 2026-11)
+  rate-limit:
+    enabled: ${ANTISPAM_RATE_LIMIT:true}
+    global-interval: 50ms
+    per-chat-send-interval: 1100ms
+    max-retry-wait: 30s
   captcha:
     timeout: ${CAPTCHA_TIMEOUT:5m}
-    prompt: "{name}, подтвердите, что вы не бот. Сколько будет {question}?"
+    prompt: "{name}, подтвердите, что вы не бот. {question}"
+  # P3: анти-юзербот пороги скоринга капчи
+  captcha-scoring:
+    min-answer-time: ${CAPTCHA_MIN_ANSWER_TIME:1s}
+    flood-ban-threshold: ${CAPTCHA_FLOOD_THRESHOLD:10}

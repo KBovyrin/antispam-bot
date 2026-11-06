@@ -52,9 +52,10 @@ class LinkModerationServiceTest {
 
     @BeforeEach
     void setUp() {
-        when(telegramApi.getChatAdminIds(CHAT)).thenReturn(List.of(777L));
+        // lenient: тесты P2 сбоя API подменяют этот стаб на doThrow
+        org.mockito.Mockito.lenient().when(telegramApi.getChatAdminIds(CHAT)).thenReturn(List.of(777L));
         service = new LinkModerationService(new AdminRegistry(clock, telegramApi), new LinkDetector(),
-                new EnforcementService(repository, telegramApi, adminNotifier, clock));
+                new EnforcementService(repository, telegramApi, adminNotifier, clock), telegramApi);
     }
 
     @Test
@@ -115,6 +116,43 @@ class LinkModerationServiceTest {
 
         verify(telegramApi, never()).banChatMember(anyLong(), anyLong());
         verify(telegramApi, never()).deleteMessage(anyLong(), anyLong());
+    }
+
+    // --- P2 2026-11: при сбое API (unknown) ссылка удаляется, автор не банится ---
+
+    @Test
+    void unknownAdminStateDeletesLinkWithoutBan() {
+        doThrow(new RuntimeException("api down")).when(telegramApi).getChatAdminIds(CHAT);
+
+        boolean banned = service.handle(CHAT, USER, USERNAME, MSG, "смотри http://spam.example", List.of());
+
+        assertThat(banned).isFalse();
+        verify(telegramApi).deleteMessage(CHAT, MSG);
+        verify(telegramApi, never()).banChatMember(anyLong(), anyLong());
+        verify(adminNotifier, never()).violation(anyLong(), anyLong(), any(), any());
+        verify(adminNotifier, never()).banFailed(anyLong(), anyLong(), any(), any());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void unknownAdminStateWithoutLinkTouchesNothing() {
+        doThrow(new RuntimeException("api down")).when(telegramApi).getChatAdminIds(CHAT);
+
+        service.handle(CHAT, USER, USERNAME, MSG, "просто текст без ссылок", List.of());
+
+        verify(telegramApi, never()).deleteMessage(anyLong(), anyLong());
+        verify(telegramApi, never()).banChatMember(anyLong(), anyLong());
+    }
+
+    @Test
+    void unknownAdminStateDeleteFailureIsContained() {
+        doThrow(new RuntimeException("api down")).when(telegramApi).getChatAdminIds(CHAT);
+        doThrow(new RuntimeException("delete failed")).when(telegramApi).deleteMessage(CHAT, MSG);
+
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() ->
+                service.handle(CHAT, USER, USERNAME, MSG, "смотри http://spam.example", List.of()));
+
+        verify(telegramApi, never()).banChatMember(anyLong(), anyLong());
     }
 
     @Test

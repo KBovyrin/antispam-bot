@@ -116,8 +116,8 @@ class EnforcementServiceTest {
     void banCreatesBannedRecordWhenAbsent() {
         // Бан по ссылке на первом сообщении: записи ещё нет — она должна создаться,
         // иначе /banlist и /unban не увидят забаненного (блокер ревью)
-        org.mockito.Mockito.when(repository.findByChatIdAndUserId(CHAT, USER))
-                .thenReturn(java.util.Optional.empty());
+        org.mockito.Mockito.when(repository.markBanned(eq(CHAT), eq(USER), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(0);
 
         service.ban(CHAT, USER, "vasya", "причина", List.of());
 
@@ -129,9 +129,24 @@ class EnforcementServiceTest {
     }
 
     @Test
+    void banUpdatesExistingRecordWithTargetedQueries() {
+        // nit ревью диффа: существующая запись обновляется точечными командами
+        // (статус отдельно, username отдельно) — save всей сущности мог откатить
+        // username, применённый параллельным updateUsername
+        org.mockito.Mockito.when(repository.markBanned(eq(CHAT), eq(USER), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(1);
+
+        service.ban(CHAT, USER, "vasya", "причина", List.of());
+
+        verify(repository).markBanned(eq(CHAT), eq(USER), org.mockito.ArgumentMatchers.any());
+        verify(repository).updateUsername(eq(CHAT), eq(USER), eq("vasya"), org.mockito.ArgumentMatchers.any());
+        verify(repository, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void banDbFailureAfterSuccessfulBanIsContained() {
         // Бан применён в Telegram — сбой записи не должен ронять обработку
-        org.mockito.Mockito.when(repository.findByChatIdAndUserId(CHAT, USER))
+        org.mockito.Mockito.when(repository.markBanned(eq(CHAT), eq(USER), org.mockito.ArgumentMatchers.any()))
                 .thenThrow(new RuntimeException("db busy"));
 
         boolean banned = service.ban(CHAT, USER, "vasya", "причина", List.of());

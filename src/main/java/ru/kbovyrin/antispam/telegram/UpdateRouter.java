@@ -46,6 +46,8 @@ public class UpdateRouter {
         } else if (update.hasCallbackQuery()) {
             handleCallback(update.getCallbackQuery());
         }
+        // channel_post/edited_channel_post сознательно НЕ обрабатываются: модерация
+        // ведётся в группе обсуждения, а не в самом канале (N3 аудита 2026-11)
     }
 
     private void handleMessage(Message message, boolean issueCaptcha) {
@@ -57,7 +59,7 @@ public class UpdateRouter {
         }
         long chatId = message.getChat().getId();
         User from = message.getFrom();
-        if (from == null || from.getIsBot()) {
+        if (from == null) {
             return;
         }
         // Личка: только команды владельца (id личного чата совпадает с id пользователя).
@@ -69,9 +71,12 @@ public class UpdateRouter {
         if (!isWatched(chatId)) {
             return;
         }
-        // Автопересылка постов канала в связанную группу (sender_chat = канал)
-        // и сообщения от имени чата (анонимные админы) не модерация обычных юзеров
-        if (message.getSenderChat() != null) {
+        // B1 (блокер аудита 2026-11): комментарий «от имени своего канала» — не
+        // привилегия. sender_chat = сторонний канал при живом from модерируется как
+        // обычное сообщение (banChatMember банит реального автора). Штатно пропускаются
+        // только анонимный админ группы (sender_chat = сам чат) и автопересылка поста
+        // связанного канала (is_automatic_forward).
+        if (isTrustedSender(message, chatId)) {
             return;
         }
         Content content = extractContent(message);
@@ -85,9 +90,26 @@ public class UpdateRouter {
             captchaService.cancelSession(chatId, from.getId());
             return;
         }
-        if (issueCaptcha) {
+        // W1 (аудит 2026-11): бот-участники модерируются наравне со всеми (спам-бот,
+        // добавленный в группу, больше не невидим), но капчу не получают — ответить
+        // на неё бот не способен
+        if (issueCaptcha && !from.getIsBot()) {
             captchaService.handleFirstMessage(chatId, from.getId(), from.getUserName(), message.getMessageId());
         }
+    }
+
+    /**
+     * Штатные отправители, не проходящие модерацию: анонимный админ группы
+     * (пишет от имени самого чата — sender_chat.id == id чата) и автопересылка
+     * поста связанного канала (is_automatic_forward). Всё прочее — в т.ч.
+     * комментарии «от имени своего канала» — модерируется.
+     */
+    private static boolean isTrustedSender(Message message, long chatId) {
+        if (message.getSenderChat() == null) {
+            return false;
+        }
+        return message.getSenderChat().getId() == chatId
+                || Boolean.TRUE.equals(message.getIsAutomaticForward());
     }
 
     /**

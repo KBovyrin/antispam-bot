@@ -6,6 +6,16 @@ services:
     # Бот лёгкий (~300–500 МБ по замерам DEPLOY §1): 1 ГБ хватает с запасом,
     # а JVM в контейнере cgroup-aware и сама ограничит heap его долей
     mem_limit: 1g
+    # Hardening аудита 2026-11: без новых привилегий, без всех capabilities
+    # (боту нужен только исходящий HTTPS и запись в /data), корень ФС read-only,
+    # /tmp — tmpfs (JVM пишет туда hsperfdata)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     # Ротация: без неё json-file-логи долгоживущего VPS растут бесконечно (N9)
     logging:
       driver: json-file

@@ -125,9 +125,13 @@ class UpdateRouterTest {
     }
 
     @Test
-    void messageFromBotIsIgnored() {
-        router.route(updateWithMessage(message(user(99L, "otherbot", true), CHAT, "текст бота")));
+    void botMessageGetsLinkModerationButNoCaptcha() {
+        // W1 (аудит 2026-11): спам-бот, добавленный в группу, больше не невидим —
+        // его ссылки модерируются (бан bot-участника работает), но капчу бот не получает
+        router.route(updateWithMessage(message(user(99L, "otherbot", true), CHAT, "текст бота http://spam.example")));
 
+        verify(linkModerationService).handle(eq(CHAT), eq(99L), eq("otherbot"), eq(5L),
+                eq("текст бота http://spam.example"), anyList());
         verify(captchaService, never()).handleFirstMessage(org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyLong());
@@ -162,10 +166,28 @@ class UpdateRouterTest {
     }
 
     @Test
-    void automaticChannelForwardIsIgnored() {
-        // Автопересылка поста канала в группу обсуждения: from — служебный юзер Telegram
+    void anonymousGroupAdminMessageIsIgnored() {
+        // Анонимный админ группы пишет от имени самой группы: sender_chat = сам чат.
+        // Модерировать его — банить собственную группу; пропускаем (доверенный отправитель)
+        Message anonymous = message(user(1087968824L, null, true), CHAT, "сообщение админа со ссылкой http://example.com");
+        anonymous.setSenderChat(chat(CHAT));
+
+        router.route(updateWithMessage(anonymous));
+
+        verify(captchaService, never()).handleFirstMessage(org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyLong());
+        verify(linkModerationService, never()).handle(org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(), anyList());
+    }
+
+    @Test
+    void automaticForwardFromLinkedChannelIsIgnored() {
+        // Автопересылка поста связанного канала: is_automatic_forward=true, from — Telegram
         Message forwarded = message(user(777000L, null, false), CHAT, "Текст поста канала со ссылкой http://example.com");
-        forwarded.setSenderChat(chat(CHAT));
+        forwarded.setSenderChat(chat(-500L));
+        forwarded.setIsAutomaticForward(true);
 
         router.route(updateWithMessage(forwarded));
 
@@ -175,6 +197,36 @@ class UpdateRouterTest {
         verify(linkModerationService, never()).handle(org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(), anyList());
+    }
+
+    @Test
+    void userCommentingAsOwnChannelIsModerated() {
+        // B1 (блокер аудита 2026-11): комментирование «от имени своего канала» —
+        // sender_chat = сторонний канал, from = живой автор. Обход щита недопустим:
+        // сообщение проходит ссылочную модерацию, автор — капчу
+        Message asChannel = message(user(42L, "vasya", false), CHAT, "пост со ссылкой http://spam.example");
+        asChannel.setSenderChat(chat(-500L));
+
+        router.route(updateWithMessage(asChannel));
+
+        verify(linkModerationService).handle(eq(CHAT), eq(42L), eq("vasya"), eq(5L),
+                eq("пост со ссылкой http://spam.example"), anyList());
+        verify(captchaService).handleFirstMessage(CHAT, 42L, "vasya", 5);
+    }
+
+    @Test
+    void channelLinkBanCancelsCaptchaLikeAnyOther() {
+        when(linkModerationService.handle(eq(CHAT), eq(42L), eq("vasya"), eq(5L), any(), anyList()))
+                .thenReturn(true);
+        Message asChannel = message(user(42L, "vasya", false), CHAT, "http://spam.example");
+        asChannel.setSenderChat(chat(-500L));
+
+        router.route(updateWithMessage(asChannel));
+
+        verify(captchaService).cancelSession(CHAT, 42L);
+        verify(captchaService, never()).handleFirstMessage(org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyLong());
     }
 
     @Test

@@ -16,5 +16,14 @@ antispam:
   bot-username: test_bot
   admin-chat-id: 1
   group-ids: -100999
+  rate-limit:
+    enabled: true
+    global-interval: 50ms
+    per-chat-send-interval: 1100ms
+    max-retry-wait: 30s
   captcha:
     timeout: 5m
+    prompt: "{name}, вопрос: {question}"
+  captcha-scoring:
+    min-answer-time: 1s
+    flood-ban-threshold: 10

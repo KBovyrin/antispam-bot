@@ -96,6 +96,99 @@ class LinkDetectorTest {
         assertThat(detector.isViolation("см. пункт 3.10 правил", List.of())).isFalse();
     }
 
+    // --- hardening 2026-11: гомоглифы, punycode, зеркала, разрывы (аудит уязвимостей) ---
+
+    @Test
+    void homoglyphTldIsViolation() {
+        // кириллическая «о» в TLD: example.соm — человек читает как example.com,
+        // браузер резолвит угон. Unicode-фолдинг конфузаблов обязан закрывать
+        assertThat(detector.isViolation("скидка example.соm/win", List.of())).isTrue();
+    }
+
+    @Test
+    void homoglyphInsideSchemeIsViolation() {
+        // кириллическая «е» в схеме: httрs://... (классический фишинг)
+        assertThat(detector.isViolation("жми httрs://example.com/x", List.of())).isTrue();
+    }
+
+    @Test
+    void punycodeIdnDomainIsViolation() {
+        // xn--e1afmkfd.xn--p1ai — punycode-представление кириллического домена .рф
+        assertThat(detector.isViolation("читай xn--e1afmkfd.xn--p1ai", List.of())).isTrue();
+        // warn ревью: регистр ACE-префикса и пунктуация вокруг не должны спасать спамера
+        assertThat(detector.isViolation("читай XN--E1AFMKFD.XN--P1AI", List.of())).isTrue();
+        assertThat(detector.isViolation("заходи (xn--e1afmkfd.xn--p1ai), вот", List.of())).isTrue();
+    }
+
+    @Test
+    void telegramMirrorLinkIsViolation() {
+        // t.me резолвится и с зеркал telegram.dog / telegram.me
+        assertThat(detector.isViolation("подпишись telegram.dog/spamchan", List.of())).isTrue();
+        assertThat(detector.isViolation("подпишись telegram.me/spamchan", List.of())).isTrue();
+    }
+
+    @Test
+    void tgSchemeLinkIsViolation() {
+        // tg://resolve?domain=... — кликабельная ссылка на канал без t.me
+        assertThat(detector.isViolation("жми tg://resolve?domain=spamchan", List.of())).isTrue();
+    }
+
+    @Test
+    void spacedDomainIsViolation() {
+        // пробел перед точкой (хвост может быть и с пробелом) человек читает как домен
+        assertThat(detector.isViolation("заходи example .com", List.of())).isTrue();
+        assertThat(detector.isViolation("заходи example . com", List.of())).isTrue();
+        // пробел только ПОСЛЕ точки: склеиваем лишь доменоподобный хвост с «безопасным»
+        // латинским TLD (без слов-омонимов) — «заходи example. com сейчас»
+        assertThat(detector.isViolation("заходи example. com сейчас", List.of())).isTrue();
+    }
+
+    @Test
+    void sentenceBoundaryIsNotViolation() {
+        // Блокер ревью диффа: пробел ПОСЛЕ точки — это граница предложения, а не домен.
+        // «нет/сайт/дети/инфо/win» есть в TLD-списке — склейка здесь банила невиновных
+        assertThat(detector.isViolation("Я так не думаю. Нет, правда.", List.of())).isFalse();
+        assertThat(detector.isViolation("Запустил блог. Сайт уже работает.", List.of())).isFalse();
+        assertThat(detector.isViolation("Мы всё решили. Дети в порядке.", List.of())).isFalse();
+        assertThat(detector.isViolation("Спроси у него. Инфо пришлю позже.", List.of())).isFalse();
+        assertThat(detector.isViolation("Try. Win it now.", List.of())).isFalse();
+        // Слова-омонимы латинских TLD не участвуют в склейке «слово. Слово»
+        assertThat(detector.isViolation("The app. Dev sent it.", List.of())).isFalse();
+        assertThat(detector.isViolation("We watched TV. Commercials were dull.", List.of())).isFalse();
+        assertThat(detector.isViolation("It went live. One more time.", List.of())).isFalse();
+        // Блокер ревью круга 3: «безопасный» список склейки сам содержал омонимы
+        assertThat(detector.isViolation("Thanks for the update. By the way, check it.", List.of())).isFalse();
+        assertThat(detector.isViolation("Just shipped the release. Net effect is positive.", List.of())).isFalse();
+        assertThat(detector.isViolation("We love our new TV. TV shows are dull.", List.of())).isFalse();
+        assertThat(detector.isViolation("Please CC me. CC everyone on the team.", List.of())).isFalse();
+        assertThat(detector.isViolation("Jupiter has a moon Io. Io is volcanic.", List.of())).isFalse();
+        assertThat(detector.isViolation("I updated to 17.5. By default it works fine.", List.of())).isFalse();
+        // nit ревью P1+P2: standalone-слова «Su/Ru/Xyz/Biz» — имена и сокращения,
+        // не TLD: склейка по ним убрана
+        assertThat(detector.isViolation("Hey guys. Su, check this please.", List.of())).isFalse();
+        assertThat(detector.isViolation("Renamed foo. Xyz is taken already.", List.of())).isFalse();
+        assertThat(detector.isViolation("Show biz. Biz is biz, friend.", List.of())).isFalse();
+    }
+
+    @Test
+    void fullwidthDomainIsViolation() {
+        // полноширинные символы (CJK-камуфляж): NFKC-нормализация обязана фолдить
+        assertThat(detector.isViolation("ＥＸＡＭＰＬＥ.ＣＯＭ", List.of())).isTrue();
+    }
+
+    @Test
+    void zeroWidthCharsInsideDomainAreViolation() {
+        assertThat(detector.isViolation("качай exa​mple.com/file", List.of())).isTrue();
+    }
+
+    @Test
+    void spacedDotsInProseAreNotViolations() {
+        // Нормализация пробелов вокруг точки не должна ловить обычную речь
+        assertThat(detector.isViolation("см . пункт 3.10 правил", List.of())).isFalse();
+        assertThat(detector.isViolation("и т . д . далее по списку", List.of())).isFalse();
+        assertThat(detector.isViolation("вышла версия 2 . 5", List.of())).isFalse();
+    }
+
     // --- entities: даже скрытые ссылки ---
 
     @Test

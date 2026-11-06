@@ -1,5 +1,10 @@
 package ru.kbovyrin.antispam.telegram;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -36,6 +41,7 @@ public class PollingBootstrap implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) throws TelegramApiException {
+        warnIfEnvFileTooOpen();
         if (!properties.enabled()) {
             log.info("Бот отключён (ANTISPAM_ENABLED=false), long polling не запущен");
             return;
@@ -48,6 +54,26 @@ public class PollingBootstrap implements ApplicationRunner {
         }
         session = botsApi.registerBot(receiver);
         log.info("Long polling запущен для бота @{}", properties.botUsername());
+    }
+
+    /**
+     * Гигиена секрета (аудит 2026-11): .env, читаемый группой/остальными — путь
+     * утечки токена. Проверка здесь, а не в DotenvEnvironmentPostProcessor: на фазе
+     * EnvironmentPostProcessor логгинг ещё не инициализирован — WARN терялся.
+     */
+    private static void warnIfEnvFileTooOpen() {
+        Path envFile = Path.of(".env");
+        if (!Files.isRegularFile(envFile)) {
+            return;
+        }
+        try {
+            var perms = Files.getPosixFilePermissions(envFile);
+            if (perms.contains(PosixFilePermission.GROUP_READ) || perms.contains(PosixFilePermission.OTHERS_READ)) {
+                log.warn("Файл .env читается группой или остальными пользователями — выполните chmod 600");
+            }
+        } catch (UnsupportedOperationException | IOException | SecurityException e) {
+            // не-POSIX ФС или нет прав на stat — не блокируем старт
+        }
     }
 
     @PreDestroy

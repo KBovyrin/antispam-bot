@@ -18,11 +18,14 @@ import jakarta.persistence.Table;
  * Схема таблицы описана в resources/schema.sql (уникальность пары chat_id+user_id —
  * уникальным индексом, т.к. Hibernate-диалект SQLite не создаёт констрейнты из @Table).
  * <p>
- * Осознанное решение — без @Version (N7): после атомарного {@code remove(key, session)}
- * в CaptchaService параллельные писатели бана (таймаут ↔ callback ↔ ссылка) схлопнулись
- * в один, а оба оставшихся пути пишут одно и то же значение BANNED — гонка теряет
- * практический смысл. Добавление @Version потребовало бы миграцию живой SQLite-базы
- * (schema.sql идемпотентен только через CREATE IF NOT EXISTS) — цена выше выгоды.
+ * Гонки писателей (таймаут-бан ↔ callback ↔ ссылка) закрыты двумя механизмами:
+ * атомарным {@code remove(key, session)} в CaptchaService (параллельные писатели
+ * бана схлопываются в одного) и точечным UPDATE только username/updatedAt для
+ * смены имени существующей записи ({@link ParticipantRepository#updateUsername}) —
+ * он физически не может перезаписать статус, записанный параллельным баном
+ * (W2 аудита 2026-11). @Version не добавлен сознательно: потребовал бы миграции
+ * живой SQLite-базы (schema.sql идемпотентен только через CREATE IF NOT EXISTS),
+ * а цена оставшихся гонок после двух механизмов выше не стала.
  */
 @Entity
 @Table(name = "participants")
@@ -85,12 +88,6 @@ public class Participant {
     /** Капча пройдена. */
     public void pass(Instant now) {
         transitionTo(Status.PASSED, now);
-    }
-
-    /** Username изменился с прошлой капчи — обновить для актуального /banlist. */
-    public void updateUsername(String username, Instant now) {
-        this.username = username;
-        this.updatedAt = now.truncatedTo(ChronoUnit.MILLIS);
     }
 
     /** Нарушение: ссылка/упоминание или провал капчи. */

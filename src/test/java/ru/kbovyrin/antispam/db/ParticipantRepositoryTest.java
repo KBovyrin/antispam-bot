@@ -106,6 +106,47 @@ class ParticipantRepositoryTest {
     }
 
     @Test
+    void updateUsernamePreservesStatus() {
+        // W2 (гонка аудита 2026-11): точечный UPDATE меняет только username/updatedAt,
+        // но не статус — параллельный BAN не может быть затёрт сменой имени
+        Participant pending = repository.saveAndFlush(Participant.newPending(-100L, 42L, "ivan", java.time.Instant.parse("2026-11-06T10:00:00Z")));
+        pending.ban(java.time.Instant.parse("2026-11-06T11:00:00Z"));
+        repository.saveAndFlush(pending);
+        entityManager.clear();
+
+        repository.updateUsername(-100L, 42L, "newname", java.time.Instant.parse("2026-11-06T12:00:00Z"));
+        entityManager.clear();
+
+        assertThat(repository.findByChatIdAndUserId(-100L, 42L))
+                .hasValueSatisfying(p -> {
+                    assertThat(p.getStatus()).isEqualTo(Participant.Status.BANNED);
+                    assertThat(p.getUsername()).isEqualTo("newname");
+                    assertThat(p.getUpdatedAt()).isEqualTo(java.time.Instant.parse("2026-11-06T12:00:00Z"));
+                });
+    }
+
+    @Test
+    void updateStatusMarksBannedAndCountsRows() {
+        // Точечный UPDATE статуса для EnforcementService: возвращает число строк,
+        // 0 = записи нет (надо создавать newBanned)
+        Participant pending = repository.saveAndFlush(Participant.newPending(-100L, 42L, "ivan", java.time.Instant.parse("2026-11-06T10:00:00Z")));
+        entityManager.clear();
+
+        int updated = repository.updateStatus(-100L, 42L, Participant.Status.BANNED,
+                java.time.Instant.parse("2026-11-06T11:00:00Z"));
+        entityManager.clear();
+
+        assertThat(updated).isEqualTo(1);
+        assertThat(repository.findByChatIdAndUserId(-100L, 42L))
+                .hasValueSatisfying(p -> {
+                    assertThat(p.getStatus()).isEqualTo(Participant.Status.BANNED);
+                    assertThat(p.getUsername()).isEqualTo("ivan"); // username не тронут
+                });
+        assertThat(repository.updateStatus(-100L, 999L, Participant.Status.BANNED,
+                java.time.Instant.now())).isZero();
+    }
+
+    @Test
     void emptyChatListYieldsNoResults() {
         // Фиксация поведения Hibernate 6 на пустом IN (GROUP_IDS может быть пустым):
         // пустой список наблюдения → никто не найден, а не ошибка/полный список
