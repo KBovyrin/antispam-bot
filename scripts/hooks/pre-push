@@ -5,6 +5,28 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+# Git запускает хуки в тощей среде (IDE/GUI): JAVA_HOME может отсутствовать,
+# а java — не быть в PATH, и mvnw падает. Выводим JAVA_HOME сами:
+# из java в PATH, иначе — первый найденный JDK (~/.jdks от IDE, /usr/lib/jvm).
+if [ -z "${JAVA_HOME:-}" ] || [ ! -x "${JAVA_HOME}/bin/java" ]; then
+    if command -v java >/dev/null 2>&1; then
+        JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")"
+        export JAVA_HOME
+    else
+        for candidate in "$HOME"/.jdks/*/bin/java /usr/lib/jvm/*/bin/java; do
+            [ -x "$candidate" ] || continue
+            JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$candidate")")")"
+            export JAVA_HOME
+            echo "==> JAVA_HOME auto: $JAVA_HOME"
+            break
+        done
+    fi
+fi
+
+# Без LANG Maven 3.9.16 падает при старте (пустая локаль JVM → NPE в инициализации
+# логгера). Хуки из IDE/GUI часто запускаются без LANG — задаём безопасный дефолт.
+export LANG="${LANG:-C.UTF-8}"
+
 echo "==> mvn verify"
 ./mvnw -B verify
 
