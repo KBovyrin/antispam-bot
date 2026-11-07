@@ -10,8 +10,8 @@ import jakarta.persistence.PersistenceContext;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
+import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -148,8 +148,8 @@ class ParticipantRepositoryTest {
 
     @Test
     void emptyChatListYieldsNoResults() {
-        // Фиксация поведения Hibernate 6 на пустом IN (GROUP_IDS может быть пустым):
-        // пустой список наблюдения → никто не найден, а не ошибка/полный список
+        // Фиксация поведения Hibernate 7 (после P5): пустой список наблюдения →
+        // никто не найден, а не ошибка/полный список
         repository.saveAndFlush(Participant.newPending(-100L, 42L, "ivan", java.time.Instant.now()));
 
         assertThat(repository.findByChatIdInAndStatus(java.util.List.of(), Participant.Status.BANNED)).isEmpty();

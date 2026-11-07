@@ -1,1 +1,1 @@
-org.springframework.boot.env.EnvironmentPostProcessor=ru.kbovyrin.antispam.config.DotenvEnvironmentPostProcessor
+org.springframework.boot.EnvironmentPostProcessor=ru.kbovyrin.antispam.config.DotenvEnvironmentPostProcessor

@@ -28,7 +28,8 @@
 
 ## Стек
 
-Java 21, Spring Boot 3, telegrambots 10.3 (long polling, `telegrambots-longpolling`
+Java 21, Spring Boot 4.1 (миграция P5 2026-11 с EOL-ветки 3.5 → 4.0.9 → 4.1.2,
+OSS-поддержка ветки до 07.2027; Framework 7, Hibernate 7), telegrambots 10.3 (long polling, `telegrambots-longpolling`
 + `telegrambots-client` OkHttp; миграция P4 2026-11 с 6.9.7 — мёртвый Jersey/Grizzly
 webhook-стек покинул зависимости), SQLite, Docker.
 
@@ -134,8 +135,11 @@ docker compose logs -f             # убедиться, что «Long polling �
   не выдаётся (нельзя наказать возможного админа). Плюс троттлинг исходящих
   и один ретрай с ожиданием `retry_after` на 429 (P1) — штормом больше
   не выжечь общий лимит бота.
-- **Spring Boot 3.5.x достиг конца жизни 30.06.2026** — новые CVE чиниться
-  в этой ветке не будут; план миграции на Boot 4 — отдельная задача.
+- **Ветка фреймворка снова патчится**: Spring Boot 3.5.x достиг конца жизни
+  30.06.2026 — проект мигрирован на Boot 4.1.2 (P5 2026-11, Framework 7 /
+  Hibernate 7, OSS-патчи до 07.2027); цепочка `spring.factories` → dotenv
+  переведена на новый FQN `org.springframework.boot.EnvironmentPostProcessor`
+  и проверена живым стартом.
 - Полного лога сообщений бот не ведёт (приватность): в логах только id, username,
   id чатов и сообщений.
 
