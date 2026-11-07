@@ -27,6 +27,7 @@ cleanup() {
 trap cleanup EXIT
 
 "$RUNTIME" run -d --name "$NAME" \
+  --read-only --tmpfs /tmp:exec --cap-drop ALL --security-opt no-new-privileges \
   -e ANTISPAM_ENABLED=false \
   -e DB_URL=jdbc:sqlite:/data/antispam.db \
   -v "$VOLUME":/data:Z \

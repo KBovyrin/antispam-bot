@@ -8,14 +8,16 @@ services:
     mem_limit: 1g
     # Hardening аудита 2026-11: без новых привилегий, без всех capabilities
     # (боту нужен только исходящий HTTPS и запись в /data), корень ФС read-only,
-    # /tmp — tmpfs (JVM пишет туда hsperfdata)
+    # /tmp — tmpfs с exec: sqlite-jdbc распаковывает нативную библиотеку в /tmp
+    # и требует исполнения; docker по умолчанию вешает noexec (VPS-инцидент
+    # 07.11.2026), podman — разрешает. Явный exec уравнивает рантаймы.
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:exec
     # Ротация: без неё json-file-логи долгоживущего VPS растут бесконечно (N9)
     logging:
       driver: json-file
